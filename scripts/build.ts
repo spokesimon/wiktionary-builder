@@ -15,13 +15,20 @@ const DB_PATH = "./dictionary.sqlite";
 // Wiktionary tags glosses/senses with these to mark them non-standard or
 // low-value for a general-purpose dictionary (dialectal spellings, obsolete
 // senses, etc). Skip senses carrying any of these.
+//
+// "form-of" is deliberately NOT here: many common irregular words (are, am,
+// is, was, were, been, ...) exist on Wiktionary only as inflected forms of
+// another lemma (e.g. "are" -> "be"), with no standalone sense of their own.
+// Skipping form-of entirely used to wipe out the *only* sense for these
+// words, leaving unrelated homographs (e.g. "Are", a village in Estonia) as
+// the sole definition. Kaikki's own gloss text for these ("third-person
+// singular... form of be") is a perfectly usable definition, so we keep it.
 const SKIP_TAGS = new Set([
   "obsolete",
   "archaic",
   "rare",
   "misspelling",
   "alt-of",
-  "form-of",
 ]);
 
 interface KaikkiSense {
