@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -51,17 +52,12 @@ async function download() {
   console.log("Download complete");
 }
 
-function pickSense(senses: KaikkiSense[] | undefined): { gloss: string; example: string | null } | null {
-  if (!senses) return null;
-  for (const sense of senses) {
-    const tags = sense.tags ?? [];
-    if (tags.some((t) => SKIP_TAGS.has(t))) continue;
-    const gloss = sense.glosses?.[0];
-    if (!gloss) continue;
-    const example = sense.examples?.find((e) => e.text)?.text ?? null;
-    return { gloss, example };
-  }
-  return null;
+// Stable across rebuilds as long as this exact sense's wording doesn't
+// change: derived from content, not row order, so a client's saved
+// senseId keeps pointing at the same definition even if kaikki reshuffles
+// or adds other senses around it.
+function senseId(word: string, pos: string, gloss: string): string {
+  return createHash("sha1").update(`${word}|${pos}|${gloss}`).digest("hex").slice(0, 16);
 }
 
 async function build() {
@@ -72,16 +68,18 @@ async function build() {
   db.exec("PRAGMA journal_mode = OFF;");
   db.exec("PRAGMA synchronous = OFF;");
   db.exec(`
-    CREATE TABLE entries (
-      word TEXT NOT NULL,
-      pos TEXT NOT NULL,
-      gloss TEXT NOT NULL,
+    CREATE TABLE senses (
+      id      TEXT PRIMARY KEY,
+      word    TEXT NOT NULL,
+      pos     TEXT NOT NULL,
+      rank    INTEGER NOT NULL,
+      gloss   TEXT NOT NULL,
       example TEXT
     );
   `);
 
   const insert = db.prepare(
-    "INSERT INTO entries (word, pos, gloss, example) VALUES (?, ?, ?, ?)"
+    "INSERT OR IGNORE INTO senses (id, word, pos, rank, gloss, example) VALUES (?, ?, ?, ?, ?, ?)"
   );
 
   const rl = createInterface({
@@ -91,12 +89,13 @@ async function build() {
 
   let lineNo = 0;
   let kept = 0;
-  const seen = new Set<string>(); // dedupe word+pos, keep first (best) sense
 
-  const insertMany = db.transaction((rows: [string, string, string, string | null][]) => {
-    for (const row of rows) insert.run(...row);
-  });
-  let batch: [string, string, string, string | null][] = [];
+  const insertMany = db.transaction(
+    (rows: [string, string, string, number, string, string | null][]) => {
+      for (const row of rows) insert.run(...row);
+    }
+  );
+  let batch: [string, string, string, number, string, string | null][] = [];
 
   for await (const line of rl) {
     lineNo++;
@@ -110,17 +109,23 @@ async function build() {
     }
 
     if (entry.lang_code !== "en") continue;
-    if (!entry.word || !entry.pos) continue;
+    if (!entry.word || !entry.pos || !entry.senses) continue;
 
-    const key = `${entry.word.toLowerCase()}\0${entry.pos}`;
-    if (seen.has(key)) continue;
+    const word = entry.word.toLowerCase();
 
-    const picked = pickSense(entry.senses);
-    if (!picked) continue;
+    // `rank` is the sense's position in Wiktionary's own ordering for this
+    // word+pos (roughly most-common-first), preserved even though some
+    // senses at other indices get filtered out below.
+    entry.senses.forEach((sense, rank) => {
+      const tags = sense.tags ?? [];
+      if (tags.some((t) => SKIP_TAGS.has(t))) return;
+      const gloss = sense.glosses?.[0];
+      if (!gloss) return;
+      const example = sense.examples?.find((e) => e.text)?.text ?? null;
 
-    seen.add(key);
-    batch.push([entry.word.toLowerCase(), entry.pos, picked.gloss, picked.example]);
-    kept++;
+      batch.push([senseId(word, entry.pos, gloss), word, entry.pos, rank, gloss, example]);
+      kept++;
+    });
 
     if (batch.length >= 5000) {
       insertMany(batch);
@@ -128,16 +133,16 @@ async function build() {
     }
 
     if (lineNo % 200000 === 0) {
-      console.log(`  processed ${lineNo} lines, kept ${kept} entries`);
+      console.log(`  processed ${lineNo} lines, kept ${kept} senses`);
     }
   }
   if (batch.length) insertMany(batch);
 
-  console.log(`Indexing ${kept} entries...`);
-  db.exec("CREATE INDEX idx_entries_word ON entries(word);");
+  console.log(`Indexing ${kept} senses...`);
+  db.exec("CREATE INDEX idx_senses_word ON senses(word);");
   db.close();
 
-  console.log(`Done: ${DB_PATH} (${kept} entries from ${lineNo} lines)`);
+  console.log(`Done: ${DB_PATH} (${kept} senses from ${lineNo} lines)`);
 }
 
 await download();
