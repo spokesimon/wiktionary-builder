@@ -1,0 +1,5 @@
+node_modules
+*.jsonl
+dictionary.sqlite
+dictionary.sqlite.gz
+raw.jsonl

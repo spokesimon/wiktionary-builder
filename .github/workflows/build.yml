@@ -1,0 +1,35 @@
+name: Build dictionary
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build dictionary.sqlite
+        run: bun run build
+
+      - name: Compress
+        run: gzip -k dictionary.sqlite
+
+      - name: Set release tag
+        id: tag
+        run: echo "tag=dict-$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            dictionary.sqlite.gz \
+            --title "Dictionary build ${{ steps.tag.outputs.tag }}" \
+            --notes "Filtered English dictionary built from kaikki.org Wiktionary data (CC BY-SA 3.0)."
