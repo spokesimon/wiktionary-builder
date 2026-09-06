@@ -23,7 +23,7 @@ jobs:
 
       - name: Set release tag
         id: tag
-        run: echo "tag=dict-$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        run: echo "tag=dict-$(date +%Y-%m-%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         env:
